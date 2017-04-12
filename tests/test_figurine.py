@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 
+import sqlite3
 from unittest import TestCase, main as unittest_main
 from unittest import mock
-import tempfile
 from datetime import datetime
 from collections import namedtuple
 from contextlib import contextmanager
-from figurine import DbTable, SqlStatement, DotDict
-from dbengine.sqlite import SqliteEngine, SqliteOpenConnectionEngine
+from figurine import (DbTable, SqlStatement, DotDict,
+                      DbEngine, OpenConnectionDbEngine)
 # dotdict is useful for testing, but not something we want to rely on from the
 # actual thing we are testing. Catch-22, so make our own that never changes so
 # we can have fancy-pants tests.
 from .utils import DotDict as expando, TestDatabase
-import sqlite3
 
 TEST_DATE = datetime(2006, 1, 2, 15, 4, 5, 123456)
 
@@ -22,7 +21,7 @@ class DbTableTest(TestCase):
 
     def setUp(self):
         self.con = self.__class__.testdb_maker.connect()
-        self.dbengine = SqliteOpenConnectionEngine(self.con)
+        self.dbengine = OpenConnectionDbEngine(sqlite3, self.con)
 
     def tearDown(self):
         if self.con:
@@ -33,7 +32,7 @@ class DbTableTest(TestCase):
     def get_dbengine(self):
         ''' Some tests require new dbengines for each individual test. '''
         with self.__class__.testdb_maker.connect() as con:
-            dbengine = SqliteOpenConnectionEngine(con)
+            dbengine = OpenConnectionDbEngine(sqlite3, con)
             yield dbengine
 
     def create_sqlitedb(self, dbname):
@@ -141,22 +140,36 @@ class DbTableTest(TestCase):
             o = DbTable(self.dbengine, pk_field=td.pk_field)
             self.assertEqual(o.get_pk(td.obj), td.pk_value)
 
-    def test_default_value(self):
-        TestData = namedtuple('TestData', 'column_default utcnow result')
-        tests = (
-            TestData(None, TEST_DATE, None),
-            TestData('CURRENT_TIME', TEST_DATE, '15:04:05'),
-            TestData('CURRENT_DATE', TEST_DATE, '2006-01-02'),
-            TestData('CURRENT_TIMESTAMP', TEST_DATE, '2006-01-02 15:04:05'),
-        )
+    # def test_default_value(self):
+    #     TestData = namedtuple('TestData', 'column_default utcnow result')
+    #     tests = (
+    #         TestData(None, TEST_DATE, None),
+    #         TestData('CURRENT_TIME', TEST_DATE, '15:04:05'),
+    #         TestData('CURRENT_DATE', TEST_DATE, '2006-01-02'),
+    #         TestData('CURRENT_TIMESTAMP', TEST_DATE, '2006-01-02 15:04:05'),
+    #     )
 
-        with mock.patch('figurine.datetime') as dt_mock:
-            dt_mock.utcnow.return_value = TEST_DATE
-            dt_mock.side_effect = lambda *args, **kw: datetime(*args, **kw)
-            for td in tests:
-                o = DbTable(self.dbengine)
-                column = expando({'COLUMN_DEFAULT': td.column_default})
-                self.assertEqual(o.default_value(column), td.result)
+    #     with mock.patch('figurine.datetime') as dt_mock:
+    #         dt_mock.utcnow.return_value = TEST_DATE
+    #         dt_mock.side_effect = lambda *args, **kw: datetime(*args, **kw)
+    #         for td in tests:
+    #             o = DbTable(self.dbengine)
+    #             column = expando({'COLUMN_DEFAULT': td.column_default})
+    #             self.assertEqual(o.default_value(column), td.result)
+
+    # def default_value(self, column):
+    #     ''' Gets a default value for the column '''
+    #     result = None
+    #     deflt = column.COLUMN_DEFAULT
+    #     if not deflt:
+    #         result = None
+    #     elif deflt.upper() == "CURRENT_TIME":
+    #         result = datetime.utcnow().strftime("%H:%M:%S")
+    #     elif deflt.upper() == "CURRENT_DATE":
+    #         result = datetime.utcnow().strftime("%Y-%m-%d")
+    #     elif deflt.upper() == "CURRENT_TIMESTAMP":
+    #         result = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    #     return result
 
     def test_create_delete_sql(self):
         TestData = namedtuple('TestData', 'table_name kwargs sql')

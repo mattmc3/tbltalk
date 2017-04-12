@@ -7,6 +7,30 @@ from datetime import datetime
 from collections import OrderedDict, namedtuple
 
 
+class DbEngine:
+    ''' A database engine impleminting DB-API v2.0+ '''
+    def __init__(self, dbapi, *args, **kwargs):
+        self.dbapi = dbapi
+        self.args = args
+        self.kwargs = kwargs
+
+    def connect(self):
+        return self.dbapi.connect(*self.args, **self.kwargs)
+
+
+class OpenConnectionDbEngine:
+    '''
+    A way to manage the connection externally, thank-you-very-much.
+    Super-useful for SQLite in-memory dbs.
+    '''
+    def __init__(self, dbapi, conn):
+        self.dbapi = dbapi
+        self.conn = conn
+
+    def connect(self):
+        return self.conn
+
+
 class DotDict(OrderedDict):
     '''
     Quick and dirty implementation of a dot-able dict, which allows access and
@@ -54,33 +78,20 @@ class DbTable:
     ''' A class that wraps your database table '''
 
     def __init__(self, dbengine, table_name=None, pk_field="id",
-                 pk_autonumber=True):
+                 pk_autonumber=True, limit_keyword="LIMIT"):
         self._dbengine = dbengine
         self._schema = None
         self.table_name = table_name or self.__class__.__name__
         self.pk_field = pk_field
         self.pk_autonumber = pk_autonumber
+        self.limit_keyword = limit_keyword
 
-    def default_value(self, column):
-        ''' Gets a default value for the column '''
-        result = None
-        deflt = column.COLUMN_DEFAULT
-        if not deflt:
-            result = None
-        elif deflt.upper() == "CURRENT_TIME":
-            result = datetime.utcnow().strftime("%H:%M:%S")
-        elif deflt.upper() == "CURRENT_DATE":
-            result = datetime.utcnow().strftime("%Y-%m-%d")
-        elif deflt.upper() == "CURRENT_TIMESTAMP":
-            result = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-        return result
-
-    def open_connection(self):
+    def connect(self):
         return self._dbengine.connect()
 
     def query(self, sql, *params):
         ''' Yields each row from a SQL query '''
-        with self.open_connection() as con:
+        with self.connect() as con:
             con.row_factory = dotdict_row_factory
             cur = con.cursor()
             for row in cur.execute(sql, *params):
@@ -88,7 +99,7 @@ class DbTable:
 
     def scalar(self, sql, *params):
         ''' Returns a single value '''
-        with self.open_connection() as con:
+        with self.connect() as con:
             cur = con.cursor()
             cur.execute(sql, *params)
             result = cur.fetchone()
@@ -99,7 +110,7 @@ class DbTable:
 
     def execute(self, sql, *params):
         ''' Executes a SQL statement '''
-        with self.open_connection() as con:
+        with self.connect() as con:
             cur = con.cursor()
             cur.execute(sql, *params)
 
@@ -107,7 +118,7 @@ class DbTable:
         '''
         Gets a record matching the id provided
         '''
-        where = f"{self.pk_field} = {self._get_paramvar()}"
+        where = f"{self.pk_field} = {self._get_paramvar(self.pk_field)}"
         return self.single(where=where, params=(id,))
 
     def has_pk(self, obj):
@@ -138,7 +149,7 @@ class DbTable:
         '''
         Deletes a record matching the id provided
         '''
-        where = f"{self.pk_field} = {self._get_paramvar()}"
+        where = f"{self.pk_field} = {self._get_paramvar(self.pk_field)}"
         self.delete(where=where, params=(id,))
 
     def delete(self, where=None, params=()):
@@ -161,7 +172,8 @@ class DbTable:
             raise ValueError("Cannot use an object with no properties to "
                              "create an INSERT statement")
         sqlcol = ", ".join(cols)
-        sqlvars = ", ".join([self._get_paramvar(c) for c in range(len(cols))])
+        paramvars = [self._get_paramvar(c, i) for i, c in enumerate(cols)]
+        sqlvars = ", ".join(paramvars)
         sql = (f"INSERT INTO {self.table_name} ({sqlcol})\n"
                f"VALUES ({sqlvars})")
         return SqlStatement(sql, params)
@@ -170,7 +182,7 @@ class DbTable:
         '''
         Executes a SQL insert statement to add a record to the DB.
         '''
-        with self.open_connection() as con:
+        with self.connect() as con:
             cur = con.cursor()
             (sql, params) = self.create_insert_statement(obj)
             cur.execute(sql, params)
@@ -185,19 +197,24 @@ class DbTable:
         filtered_cols = [(k, v) for k, v in obj.items()
                          if k.lower() != self.pk_field.lower()]
         cols, param_vals = zip(*filtered_cols)
-        param_vals = list(param_vals)
-        param_vals.append(id)
         if len(cols) == 0:
             raise ValueError("Cannot use an object with no properties to "
                              "create an UPDATE statement")
-        sqlvars = [self._get_paramvar(c) for c in range(len(param_vals))]
 
-        # save last param for the pk in the WHERE
-        setitems = zip(cols, sqlvars[:-1])
-        selclause = "\n,".join([f"{col} = {p}" for col, p in setitems])
+        # make SET clause
+        setitems = [(c, self._get_paramvar(c, i))
+                    for i, c in enumerate(cols)]
+        setclause = "\n,".join([f"{col} = {p}" for col, p in setitems])
+
+        # make where
+        param_vals = list(param_vals)
+        param_vals.append(id)
+        pk_param = self._get_paramvar(self.pk_field, len(cols))
+        where = f"{self.pk_field} = {pk_param}"
+
         sql = (f"UPDATE {self.table_name}\n"
-               f"SET {selclause}\n"
-               f"WHERE {self.pk_field} = {sqlvars[-1]}")
+               f"SET {setclause}\n"
+               f"WHERE {where}")
         return SqlStatement(sql, tuple(param_vals))
 
     def update(self, obj, id):
@@ -225,7 +242,7 @@ class DbTable:
 
         def get_toplimit(l):
             topsql, limitsql = "", ""
-            lkw = self._dbengine.limit_keyword.upper()
+            lkw = self.limit_keyword.upper()
             if l is not None:
                 if not isinstance(l, int):
                     raise ValueError(f"Limit is not an int: {l}")
@@ -339,7 +356,8 @@ class DbTable:
                 select_parts[aliases[key]] = value
             else:
                 # other keywords are considered WHERE equality conditions
-                constraints.append(f"{key} = {self._get_paramvar(counter)}")
+                p = self._get_paramvar(key, counter)
+                constraints.append(f"{key} = {p}")
                 params.append(value)
                 counter += 1
 
@@ -369,5 +387,24 @@ class DbTable:
                 sqlselect = self.create_select_sql(**select_parts)
                 return list(self.query(sqlselect, tuple(params)))
 
-    def _get_paramvar(self, index=0, name=""):
-        return self._dbengine.get_paramvar(index, name)
+    def _get_paramvar(self, name, index=0):
+        # we need to be super careful with params
+        if not isinstance(index, int):
+            raise ValueError("non-integer index value")
+        if ';' in name or "'" in name:
+            raise ValueError("bad name value")
+
+        # https://www.python.org/dev/peps/pep-0249/#paramstyle
+        ps = self._dbengine.dbapi.paramstyle
+        if ps == 'qmark':
+            return '?'
+        elif ps == 'numeric':
+            return f':{index}'
+        elif ps == 'named':
+            return f':{name}'
+        elif ps == 'format':
+            return f'%s'
+        elif ps == 'pyformat':
+            return f'%({name})s'
+        else:
+            raise ValueError(f"Unsupported paramstyle: {ps}")
