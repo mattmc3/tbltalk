@@ -11,7 +11,7 @@ from dbengine.sqlite import SqliteEngine, SqliteOpenConnectionEngine
 # dotdict is useful for testing, but not something we want to rely on from the
 # actual thing we are testing. Catch-22, so make our own that never changes so
 # we can have fancy-pants tests.
-from utils import DotDict as expando, TestDatabase
+from .utils import DotDict as expando, TestDatabase
 import sqlite3
 
 TEST_DATE = datetime(2006, 1, 2, 15, 4, 5, 123456)
@@ -325,7 +325,6 @@ class DbTableTest(TestCase):
         smugglers = o.find_by_allegiance(allegiance='Smuggler',
                                          first_appeared_movie_id=1,
                                          orderby="name")
-        print(smugglers)
         self.assertEqual(len(smugglers), 2)
         self.assertEqual(smugglers[0].name, 'Chewbacca')
         self.assertEqual(smugglers[1].name, 'Han Solo')
