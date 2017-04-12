@@ -10,5 +10,5 @@ setup(
     author='Matt McElheny',
     author_email='mattmc3@gmail.com',
     url='https://github.com/mattmc3/pyfigurine',
-    scripts=['figurine'],
+    scripts=['figurine.py'],
 )
