@@ -3,6 +3,8 @@
 A micro ORM (sorta) for Python inspired by Massive. Because sometimes you just
 need a simple, single file database wrapper.
 """
+import re
+import inspect
 from datetime import datetime
 from collections import OrderedDict, namedtuple
 
@@ -71,6 +73,19 @@ def dotdict_row_factory(cur, row):
     return result
 
 
+def to_dotdict(obj):
+    if isinstance(obj, DotDict):
+        return obj
+    elif isinstance(obj, dict):
+        return DotDict(obj)
+    else:
+        result = DotDict()
+        for name in dir(obj):
+            value = getattr(obj, name)
+            if not name.startswith('__') and not inspect.ismethod(value):
+                result[name] = value
+        return result
+
 SqlStatement = namedtuple('SqlStatement', 'sql params')
 
 
@@ -85,6 +100,8 @@ class DbTable:
         self.pk_field = pk_field
         self.pk_autonumber = pk_autonumber
         self.limit_keyword = limit_keyword
+        pat = "min|max|count|avg|sum|single|one|first|last|(find|get)(_by)?"
+        self._re_dynamic_methods = re.compile(pat)
 
     def connect(self):
         return self._dbengine.connect()
@@ -126,14 +143,14 @@ class DbTable:
         Determines if the object provided has a property with a name matching
         whatever self.pk_field is set to.
         '''
-        return hasattr(obj, self.pk_field)
+        return self.pk_field in to_dotdict(obj)
 
     def get_pk(self, obj):
         '''
         If the object provided has a property with a name matching
         whatever self.pk_field is set to, that value is returned.
         '''
-        return obj.get(self.pk_field, None)
+        return to_dotdict(obj).get(self.pk_field, None)
 
     def create_delete_sql(self, where=None):
         '''
@@ -164,6 +181,7 @@ class DbTable:
         '''
         Makes an INSERT SqlStatement to add a record to the DB.
         '''
+        obj = to_dotdict(obj)
         filtered_cols = [(k, v) for k, v in obj.items()
                          if k.lower() != self.pk_field.lower() or
                          not self.pk_autonumber]
@@ -190,10 +208,13 @@ class DbTable:
             id = cur.fetchone()[0]
         return id
 
-    def create_update_statement(self, obj, id):
+    def create_update_statement(self, obj, id=None):
         '''
         Makes a SQL update statement to modify a record in the DB.
         '''
+        obj = to_dotdict(obj)
+        if id is None:
+            id = obj[self.pk_field]
         filtered_cols = [(k, v) for k, v in obj.items()
                          if k.lower() != self.pk_field.lower()]
         cols, param_vals = zip(*filtered_cols)
@@ -217,7 +238,7 @@ class DbTable:
                f"WHERE {where}")
         return SqlStatement(sql, tuple(param_vals))
 
-    def update(self, obj, id):
+    def update(self, obj, id=None):
         '''
         Executes a SQL update statement to modify a record in the DB.
         '''
@@ -301,11 +322,20 @@ class DbTable:
         '''
         If an unrecognized method is called, assume we wanted dynamicquery
         '''
-        return lambda *args, **kwargs: self.dynamicquery(name, *args, **kwargs)
+        if not self._re_dynamic_methods.match(name):
+            raise AttributeError(f"object has no attribute '{name}'")
+
+        def runit(*args, **kwargs):
+            try:
+                return self.dynamicquery(name, *args, **kwargs)
+            except Exception as err:
+                raise RuntimeError(f"Method not found: {name}. dynamicquery "
+                                   f"called instead and it errored") from err
+        return runit
 
     def dynamicquery(self, method_name, *args, **kwargs):
         if len(args) > 0:
-            raise ValueError(f"Error in dynamic call to {method_name}:"
+            raise ValueError(f"Error in dynamicquery call to {method_name}: "
                              f"Named arguments are required for this type of "
                              f"query - the column name, orderby, columns, etc")
         select_parts = {
