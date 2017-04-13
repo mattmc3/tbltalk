@@ -53,7 +53,7 @@ class DotDict(OrderedDict):
         except KeyError as err:
             raise AttributeError()
 
-    __setattr__ = dict.__setitem__
+    __setattr__ = OrderedDict.__setitem__
 
 
 def first(iterable, default=None, raiseOnEmpty=False):
