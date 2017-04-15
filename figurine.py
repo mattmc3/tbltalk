@@ -131,6 +131,12 @@ class DbTable:
             cur = con.cursor()
             cur.execute(sql, *params)
 
+    def executescript(self, sql, *params):
+        ''' Executes a SQL statement '''
+        with self.connect() as con:
+            cur = con.cursor()
+            cur.executescript(sql, *params)
+
     def get_by_id(self, id):
         '''
         Gets a record matching the id provided
