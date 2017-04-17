@@ -318,7 +318,7 @@ class DbTableTest(TestCase):
                               ('name', 'Star Wars (A New Hope)'),
                               ('episode', 'IV'),
                               ('director', 'George Lucas'),
-                              ('released_year', 1977),
+                              ('release_year', 1977),
                               ('chronology', 5)])),
         )
         for td in tests:
@@ -347,7 +347,7 @@ class DbTableTest(TestCase):
                               'dbtbl_kwargs min_kwargs result')
         tests = (
             TestData({'table_name': 'movies'},
-                     {'columns': 'released_year'}, 1977),
+                     {'columns': 'release_year'}, 1977),
             TestData({'table_name': 'characters'},
                      {'columns': 'name'}, 'Admiral Ackbar'),
             TestData({'table_name': 'characters'},
@@ -365,7 +365,7 @@ class DbTableTest(TestCase):
                               'dbtbl_kwargs max_kwargs result')
         tests = (
             TestData({'table_name': 'movies'},
-                     {'columns': 'released_year'}, 2017),
+                     {'columns': 'release_year'}, 2017),
             TestData({'table_name': 'characters'},
                      {'columns': 'name'}, 'Yoda'),
             TestData({'table_name': 'characters'},
