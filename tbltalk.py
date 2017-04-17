@@ -7,6 +7,10 @@ import re
 import inspect
 from datetime import datetime
 from collections import OrderedDict, namedtuple
+SqlStatement = namedtuple('SqlStatement', 'sql params')
+PagedResult = namedtuple('PagedResult',
+                         ['total_records', 'total_pages', 'page_size',
+                          'current_page', 'records'])
 
 
 class DbEngine:
@@ -86,8 +90,6 @@ def to_dotdict(obj):
                 result[name] = value
         return result
 
-SqlStatement = namedtuple('SqlStatement', 'sql params')
-
 
 class DbTable:
     ''' A class that wraps your database table '''
@@ -109,10 +111,10 @@ class DbTable:
     def query(self, sql, *params):
         ''' Yields each row from a SQL query '''
         with self.connect() as con:
-            con.row_factory = dotdict_row_factory
+            # con.row_factory has side effects for always open connections
             cur = con.cursor()
             for row in cur.execute(sql, *params):
-                yield row
+                yield dotdict_row_factory(cur, row)
 
     def scalar(self, sql, *params):
         ''' Returns a single value '''
@@ -131,6 +133,12 @@ class DbTable:
             cur = con.cursor()
             cur.execute(sql, *params)
 
+    def executemany(self, sql, *params):
+        ''' Executes a SQL statement multiple times for each set of params'''
+        with self.connect() as con:
+            cur = con.cursor()
+            cur.executemany(sql, *params)
+
     def executescript(self, sql, *params):
         ''' Executes a SQL statement '''
         with self.connect() as con:
@@ -141,7 +149,7 @@ class DbTable:
         '''
         Gets a record matching the id provided
         '''
-        where = f"{self.pk_field} = {self._get_paramvar(self.pk_field)}"
+        where = f"{self.pk_field} = {self.make_sqlparam(self.pk_field)}"
         return self.single(where=where, params=(id,))
 
     def has_pk(self, obj):
@@ -172,7 +180,7 @@ class DbTable:
         '''
         Deletes a record matching the id provided
         '''
-        where = f"{self.pk_field} = {self._get_paramvar(self.pk_field)}"
+        where = f"{self.pk_field} = {self.make_sqlparam(self.pk_field)}"
         self.delete(where=where, params=(id,))
 
     def delete(self, where=None, params=()):
@@ -196,7 +204,7 @@ class DbTable:
             raise ValueError("Cannot use an object with no properties to "
                              "create an INSERT statement")
         sqlcol = ", ".join(cols)
-        paramvars = [self._get_paramvar(c, i) for i, c in enumerate(cols)]
+        paramvars = [self.make_sqlparam(c, i) for i, c in enumerate(cols)]
         sqlvars = ", ".join(paramvars)
         sql = (f"INSERT INTO {self.table_name} ({sqlcol})\n"
                f"VALUES ({sqlvars})")
@@ -229,14 +237,14 @@ class DbTable:
                              "create an UPDATE statement")
 
         # make SET clause
-        setitems = [(c, self._get_paramvar(c, i))
+        setitems = [(c, self.make_sqlparam(c, i))
                     for i, c in enumerate(cols)]
         setclause = "\n,".join([f"{col} = {p}" for col, p in setitems])
 
         # make where
         param_vals = list(param_vals)
         param_vals.append(id)
-        pk_param = self._get_paramvar(self.pk_field, len(cols))
+        pk_param = self.make_sqlparam(self.pk_field, len(cols))
         where = f"{self.pk_field} = {pk_param}"
 
         sql = (f"UPDATE {self.table_name}\n"
@@ -250,6 +258,12 @@ class DbTable:
         '''
         stmt = self.create_update_statement(obj, id)
         self.execute(stmt.sql, stmt.params)
+
+    def create_upsert_statement(self, obj):
+        if self.has_pk(obj):
+            return self.create_update_statement(obj)
+        else:
+            return self.create_insert_statement(obj)
 
     def create_select_sql(self, columns="*", distinct=False, where=None,
                           groupby=None, having=None, orderby=None, limit=None):
@@ -271,12 +285,10 @@ class DbTable:
             topsql, limitsql = "", ""
             lkw = self.limit_keyword.upper()
             if l is not None:
-                if not isinstance(l, int):
-                    raise ValueError(f"Limit is not an int: {l}")
+                if lkw == "LIMIT":
+                    limitsql = f" LIMIT {l}"
                 elif lkw == "TOP":
                     topsql = f" TOP {l}"
-                elif lkw == "LIMIT":
-                    limitsql = f" LIMIT {l}"
                 else:
                     raise ValueError(f"Unhandled limit keyword: {lkw}")
             return (topsql, limitsql)
@@ -300,29 +312,42 @@ class DbTable:
 
         return sql
 
-    def all(self, columns="*", distinct=False, where=None,
-            orderby=None, limit=None, params=()):
+    def all(self, columns="*", distinct=False, where=None, groupby=None,
+            having=None, orderby=None, limit=None, params=()):
         '''
         Returns all records matching the provided WHERE clause and arguments,
         ordered as specified, and limited if specified.
         '''
-        sql = self.create_select_sql(limit=limit, columns=columns,
-                                     distinct=distinct, orderby=orderby,
-                                     where=where)
-        return self.query(sql, params)
+        sql = self.create_select_sql(columns=columns, distinct=distinct,
+                                     where=where, groupby=groupby,
+                                     having=having, orderby=orderby,
+                                     limit=limit)
+        return list(self.query(sql, params))
 
-    def paged(self, columns="*", where=None, orderby=None, pagesize=20,
-              currentpage=1, params=()):
-        ''' TODO: Implement me! '''
-        pass
+    def paged(self, columns="*", distinct=False, where=None, groupby=None,
+              having=None, orderby=None, page_size=20, current_page=1,
+              params=()):
+        total_records = self.count(distinct=distinct, where=where,
+                                   groupby=groupby, having=having,
+                                   orderby=orderby, params=params)
+        result = DotDict()
+        result.total_records = total_records
+        result.page_size = page_size
+        result.current_page = current_page
+        limit = f"{(current_page - 1) * page_size}, {page_size}"
+        result.records = self.all(columns=columns, distinct=distinct,
+                                  where=where, groupby=groupby, having=having,
+                                  orderby=orderby, limit=limit, params=params)
+        return result
 
     def save(self, *args):
-        ''' TODO: Implement me! '''
-        pass
-
-    def build_statements(self):
-        ''' TODO: Implement me! '''
-        pass
+        statements = []
+        for obj in args:
+            statements.append(self.create_upsert_statement(obj))
+        with self.connect() as con:
+            cur = con.cursor()
+            for stmt in statements:
+                cur.execute(stmt.sql, stmt.params)
 
     def __getattr__(self, name):
         '''
@@ -372,6 +397,7 @@ class DbTable:
         one_result_methods = {
             'single': '',
             'one': '',
+            'fetchone': '',
             'first': '',
             'last': ' DESC'
         }
@@ -392,7 +418,7 @@ class DbTable:
                 select_parts[aliases[key]] = value
             else:
                 # other keywords are considered WHERE equality conditions
-                p = self._get_paramvar(key, counter)
+                p = self.make_sqlparam(key, counter)
                 constraints.append(f"{key} = {p}")
                 params.append(value)
                 counter += 1
@@ -423,24 +449,25 @@ class DbTable:
                 sqlselect = self.create_select_sql(**select_parts)
                 return list(self.query(sqlselect, tuple(params)))
 
-    def _get_paramvar(self, name, index=0):
-        # we need to be super careful with params
+    def make_sqlparam(self, name, index=0):
+        """Returns a sql parameter for the specified paramstyle"""
+        # we need to be extra careful with params to prevent injection.
         if not isinstance(index, int):
-            raise ValueError("non-integer index value")
+            raise ValueError(f"non-integer index value: {index}")
         if ';' in name or "'" in name:
-            raise ValueError("bad name value")
+            raise ValueError("Unsupported name value: {name}")
 
         # https://www.python.org/dev/peps/pep-0249/#paramstyle
-        ps = self._dbengine.dbapi.paramstyle
-        if ps == 'qmark':
+        paramstyle = self._dbengine.dbapi.paramstyle
+        if paramstyle == 'qmark':
             return '?'
-        elif ps == 'numeric':
+        elif paramstyle == 'numeric':
             return f':{index}'
-        elif ps == 'named':
+        elif paramstyle == 'named':
             return f':{name}'
-        elif ps == 'format':
+        elif paramstyle == 'format':
             return f'%s'
-        elif ps == 'pyformat':
+        elif paramstyle == 'pyformat':
             return f'%({name})s'
         else:
-            raise ValueError(f"Unsupported paramstyle: {ps}")
+            raise ValueError(f"Unsupported paramstyle: {paramstyle}")

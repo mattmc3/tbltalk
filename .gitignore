@@ -128,5 +128,6 @@ ENV/
 
 # Custom
 .vscode/
-*.cs
 notebook/
+*.sqlite
+*.db

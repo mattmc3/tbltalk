@@ -383,5 +383,63 @@ class DbTableTest(TestCase):
         movies = list(o.all())
         self.assertEqual(9, len(movies))
 
+    def test_paged(self):
+        o = DbTable(self.dbengine, table_name="movies")
+        TestData = namedtuple('TestData',
+                              ['dbtbl_kwargs', 'paged_kwargs', 'start_page',
+                               'end_page', 'total_records', 'total_pages',
+                               'result'])
+        tests = (
+            TestData(
+                {'table_name': 'movies'},
+                {
+                    'columns': ['id', 'name', 'episode'],
+                    'where': "director = ?",
+                    'params': ('George Lucas',),
+                    'orderby': 'release_year',
+                    'page_size': 2,
+                },
+                1,
+                4,
+                5,
+                3,
+                [
+                    [
+                        DotDict((('id', 1),
+                                ('name', 'Star Wars (A New Hope)'),
+                                ('episode', 'IV'))),
+                        DotDict((('id', 3),
+                                ('name', 'Return of the Jedi'),
+                                ('episode', 'VI'))),
+                    ],
+                    [
+                        DotDict((('id', 4),
+                                ('name', 'Star Wars: Episode I - The Phantom Menace'),
+                                ('episode', 'I'))),
+                        DotDict((('id', 5),
+                                ('name', 'Star Wars: Episode II - Attack of the Clones'),
+                                ('episode', 'II'))),
+                    ],
+                    [
+                        DotDict((('id', 6),
+                                ('name', 'Star Wars: Episode III - Revenge of the Sith'),
+                                ('episode', 'III'))),
+                    ],
+                    []
+                ]
+            ),
+        )
+        for td in tests:
+            o = DbTable(self.dbengine, **td.dbtbl_kwargs)
+            paged_kwargs = td.paged_kwargs
+            for idx, current_page in enumerate(range(td.start_page, td.end_page + 1)):
+                paged_kwargs["current_page"] = current_page
+                result = o.paged(**paged_kwargs)
+                self.assertEqual(result.current_page, paged_kwargs["current_page"])
+                self.assertEqual(result.total_records, td.total_records)
+                self.assertEqual(len(result.records), len(td.result[idx]))
+                self.assertEqual(result.records, td.result[idx])
+
+
 if __name__ == '__main__':
     unittest_main()
