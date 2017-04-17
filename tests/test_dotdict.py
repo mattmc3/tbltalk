@@ -3,7 +3,7 @@
 import unittest
 from unittest import mock
 from collections import namedtuple
-from figurine import DotDict
+from tbltalk import DotDict
 
 
 class DotDictTest(unittest.TestCase):

@@ -6,8 +6,8 @@ from unittest import mock
 from datetime import datetime
 from collections import namedtuple
 from contextlib import contextmanager
-from figurine import (DbTable, SqlStatement, DotDict,
-                      DbEngine, OpenConnectionDbEngine)
+from tbltalk import (DbTable, SqlStatement, DotDict,
+                     DbEngine, OpenConnectionDbEngine)
 # dotdict is useful for testing, but not something we want to rely on from the
 # actual thing we are testing. Catch-22, so make our own that never changes so
 # we can have fancy-pants tests.
@@ -149,7 +149,7 @@ class DbTableTest(TestCase):
     #         TestData('CURRENT_TIMESTAMP', TEST_DATE, '2006-01-02 15:04:05'),
     #     )
 
-    #     with mock.patch('figurine.datetime') as dt_mock:
+    #     with mock.patch('tbltalk.datetime') as dt_mock:
     #         dt_mock.utcnow.return_value = TEST_DATE
     #         dt_mock.side_effect = lambda *args, **kw: datetime(*args, **kw)
     #         for td in tests:
