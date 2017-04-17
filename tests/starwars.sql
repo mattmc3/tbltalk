@@ -1,4 +1,5 @@
 -- My custom Star Wars character database for testing fun...
+-- Star Wars Test DataSet v1.0.1
 --
 -- Copyright 2017, Matt McElheny <mattmc3 at google's standard email domain dotcom>
 -- License: Creative Commons v4.0
@@ -13,31 +14,32 @@
 --     **Change it the way you want it to be IN A TEST, not here.**
 --
 -- 1.) If you find yourself thinking: "Does Leia really have the Force if she
---     never learned to be a Jedi???"... then: you should write a test of
---     Figurine's UPDATE function to make it the way you want it.
+--     never learned to be a Jedi???"... then: you should write a test of the
+--     UPDATE function to make it the way you want it.
 -- 2.) If you find yourself thinking: "But you forgot <character x>!? (S)he is
 --     the best! How could you forget <character x>?"... then: you should write
---     a test of Figurine's INSERT function add that character. Unless yousa
---     gonna add _that_ character, in which case turn in your nerd creds.
---     Meesa done here. There's no hope for you. If you're missing Wedge
---     Antilles or Porkins, well done!
+--     a test of the INSERT function add that character. Unless yousa wanna add
+--     _that_ character, in which case turn in your nerd creds. Meesa done
+--     here. There's no hope for you. If you're missing Wedge Antilles or
+--     Porkins, well done!
 -- 3.) If you find some other nit to pick, post your own dataset to a site like
 --     https://www.kaggle.com/datasets. Devs like me sure could use free, light,
 --     easy to grok test datasets for use in projects like this. And don't
 --     forget to license via Creative Commons or another permissive license.
 --     My sincerest thanks!
 
+DROP TABLE IF EXISTS movies;
 CREATE TABLE movies (
     id INTEGER PRIMARY KEY NOT NULL
     ,name TEXT
     ,episode TEXT
     ,director TEXT
-    ,released_year INT
+    ,release_year INT
     ,chronology INT
 );
 
 INSERT INTO movies
-(name, episode, director, released_year, chronology)
+(name, episode, director, release_year, chronology)
 VALUES
  ('Star Wars (A New Hope)', 'IV', 'George Lucas', 1977, 5)
 ,('The Empire Strikes Back', 'V', 'Irvin Kershner', 1980, 6)
@@ -46,10 +48,11 @@ VALUES
 ,('Star Wars: Episode II - Attack of the Clones', 'II', 'George Lucas', 2002, 2)
 ,('Star Wars: Episode III - Revenge of the Sith', 'III', 'George Lucas', 2005, 3)
 ,('Star Wars: The Force Awakens', 'VII', 'J.J. Abrams', 2015, 8)
-,('Rogue One: A Star Wars Story', 'VIII', 'Gareth Edwards', 2016, 4)
-,('Star Wars: The Last Jedi', NULL, 'Rian Johnson', 2017, 9)
+,('Rogue One: A Star Wars Story', NULL, 'Gareth Edwards', 2016, 4)
+,('Star Wars: The Last Jedi', 'VIII', 'Rian Johnson', 2017, 9)
 ;
 
+DROP TABLE IF EXISTS characters;
 CREATE TABLE characters (
     id INTEGER PRIMARY KEY NOT NULL
     ,name TEXT NOT NULL
