@@ -1,5 +1,5 @@
 -- My custom Star Wars character database for testing fun...
--- Star Wars Test DataSet v1.0.1
+-- Star Wars Test DataSet v1.0.1 for SQLite3
 --
 -- Copyright 2017, Matt McElheny <mattmc3 at google's standard email domain dotcom>
 -- License: Creative Commons v4.0
@@ -28,14 +28,27 @@
 --     forget to license via Creative Commons or another permissive license.
 --     My sincerest thanks!
 
-DROP TABLE IF EXISTS movies;
+IF OBJECT_ID('characters') IS NOT NULL DROP TABLE characters;
+IF OBJECT_ID('movies') IS NOT NULL DROP TABLE movies;
+
 CREATE TABLE movies (
-    id INTEGER PRIMARY KEY NOT NULL
-    ,name TEXT
-    ,episode TEXT
-    ,director TEXT
+    id INT IDENTITY(1, 1) PRIMARY KEY NOT NULL
+    ,name VARCHAR(255)
+    ,episode VARCHAR(255)
+    ,director VARCHAR(255)
     ,release_year INT
     ,chronology INT
+);
+
+CREATE TABLE characters (
+    id INT IDENTITY(1, 1) PRIMARY KEY NOT NULL
+    ,name VARCHAR(255) NOT NULL
+    ,sex VARCHAR(255)
+    ,character_type VARCHAR(255)
+    ,allegiance VARCHAR(255)
+    ,first_appeared_movie_id INT REFERENCES movies(id)
+    ,has_force BIT
+    ,died_in_movie_id INT REFERENCES movies(id)
 );
 
 INSERT INTO movies
@@ -51,18 +64,6 @@ VALUES
 ,('Rogue One: A Star Wars Story', NULL, 'Gareth Edwards', 2016, 4)
 ,('Star Wars: The Last Jedi', 'VIII', 'Rian Johnson', 2017, 9)
 ;
-
-DROP TABLE IF EXISTS characters;
-CREATE TABLE characters (
-    id INTEGER PRIMARY KEY NOT NULL
-    ,name TEXT NOT NULL
-    ,sex TEXT
-    ,character_type TEXT
-    ,allegiance TEXT
-    ,first_appeared_movie_id INT REFERENCES movies(id)
-    ,has_force BOOLEAN CHECK (has_force IN (0, 1))
-    ,died_in_movie_id INT REFERENCES movies(id)
-);
 
 -- 42 of them!
 INSERT INTO characters

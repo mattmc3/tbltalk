@@ -6,71 +6,62 @@ from unittest import mock
 from datetime import datetime
 from collections import namedtuple
 from contextlib import contextmanager
+from collections import namedtuple
 from tbltalk import (DbTable, SqlStatement, DotDict,
-                     DbEngine, OpenConnectionDbEngine)
+                     DbEngine, sqlparam)
 # dotdict is useful for testing, but not something we want to rely on from the
 # actual thing we are testing. Catch-22, so make our own that never changes so
 # we can have fancy-pants tests.
-from .utils import DotDict as expando, TestDatabase
+from .utils import (DotDict as expando, get_db_backend,
+                    get_args_and_kwargs, popdb)
 
+TestDbBackend = namedtuple('TestDbBackend', 'backend_name args kwargs')
 TEST_DATE = datetime(2006, 1, 2, 15, 4, 5, 123456)
+TEST_DB_BACKENDS = {
+    'sqlite_memory': TestDbBackend('sqlite', *get_args_and_kwargs(':memory:')),
+    'sqlite_file': TestDbBackend('sqlite', *get_args_and_kwargs('test.db')),
+    'pg': TestDbBackend('postgres', *get_args_and_kwargs("dbname=test user=test")),
+    'mariadb': TestDbBackend('mariadb', *get_args_and_kwargs(host='localhost', user='root', password='', db='test', charset='utf8mb4')),
+    'mssql': TestDbBackend('mssql', *get_args_and_kwargs("localhost", "test", "", "test", autocommit=True)),
+    'mssql_odbc': TestDbBackend('mssql_odbc', *get_args_and_kwargs("DRIVER=FreeTDS;SERVER=localhost;PORT=1433;DATABASE=test;UID=test;PWD=;")),
+}
+
+DB_BACKEND = 'sqlite_memory'
+USE_SAME_CURSOR = True
 
 
 class DbTableTest(TestCase):
-    testdb_maker = TestDatabase()
-
     def setUp(self):
-        self.con = self.__class__.testdb_maker.connect()
-        self.dbengine = OpenConnectionDbEngine(sqlite3, self.con)
+        self.con = None
+        self.dbengine = self.get_dbengine()
 
     def tearDown(self):
         if self.con:
+            self.con.commit()
             self.con.close()
-            self.con = None
+        self.con = None
 
-    @contextmanager
     def get_dbengine(self):
-        ''' Some tests require new dbengines for each individual test. '''
-        with self.__class__.testdb_maker.connect() as con:
-            dbengine = OpenConnectionDbEngine(sqlite3, con)
-            yield dbengine
+        test_backend = TEST_DB_BACKENDS[DB_BACKEND]
+        be = get_db_backend(test_backend.backend_name)
+        dbengine = DbEngine(be.dbapi, be.dialect, *test_backend.args, **test_backend.kwargs)
+        con = dbengine.connect()
+        cur = con.cursor()
+        popdb(be.popsql, cur)
+        con.commit()
+        if USE_SAME_CURSOR:
+            self.con = con
+            dbengine.set_shared_connection(con)
+        else:
+            con.close()
+        return dbengine
 
-    def create_sqlitedb(self, dbname):
-        with sqlite3.connect(dbname) as con:
-            cur = con.cursor()
-            cur.execute("""
-                CREATE TABLE people (
-                    id INTEGER PRIMARY KEY,
-                    name TEXT,
-                    age INT
-                )""")
-            cur.execute('CREATE UNIQUE INDEX un_people ON people (name)')
-            cur.execute("""
-                CREATE TABLE pets (
-                    id INTEGER PRIMARY KEY,
-                    name TEXT,
-                    species TEXT,
-                    breed TEXT,
-                    owner_id INT
-                )""")
-            sqlinsert_person = ("INSERT INTO people (name, age) "
-                                "VALUES (?, ?)")
-            sqlinsert_pets = ("INSERT INTO pets "
-                              "(name, species, breed, owner_id) "
-                              "VALUES (?, ?, ?, ?)")
-            cur.executemany(sqlinsert_person,
-                            [('Mr. Dearly', 32),
-                             ('Mrs. Dearly', 27)])
-            cur.executemany(sqlinsert_pets,
-                            [('Pongo', 'dog', 'dalmatian', 1),
-                             ('Missis', 'dog', 'dalmatian', 2),
-                             ('Perdita', 'dog', 'dalmatian', 2),
-                             ('Prince', 'dog', 'dalmatian', None)])
+    def p(self, name=None, idx=0):
+        return sqlparam(self.dbengine.dbapi.paramstyle, name, idx)
 
     def test_initial_db_setup(self):
-        testdb = TestDatabase()
-        with self.__class__.testdb_maker.connect() as con:
-            cur = con.cursor()
+        dbengine = self.get_dbengine()
+        with dbengine.cursor() as cur:
             cur.execute("SELECT COUNT(*) FROM movies")
             num_movies = cur.fetchone()[0]
             self.assertEqual(num_movies, 9)
@@ -83,13 +74,13 @@ class DbTableTest(TestCase):
         tests = (
             TestData(("SELECT COUNT(*) AS c "
                       "FROM characters "
-                      "WHERE character_type = ?"),
+                      f"WHERE character_type = {self.p()}"),
                      ('Droid',),
                      [{'c': 5}]),
             TestData(("SELECT name as the_droids_youre_looking_for "
                       "FROM characters "
-                      "WHERE character_type = ? "
-                      "AND first_appeared_movie_id = ? "),
+                      f"WHERE character_type = {self.p()} "
+                      f"AND first_appeared_movie_id = {self.p()} "),
                      ('Droid', 1),
                      [{'the_droids_youre_looking_for': 'R2-D2'},
                       {'the_droids_youre_looking_for': 'C-3PO'}]),
@@ -112,7 +103,7 @@ class DbTableTest(TestCase):
                       "WHERE first_appeared_movie_id IS NULL"), 1, ()),
             TestData(("SELECT COUNT(*) "
                       "FROM characters "
-                      "WHERE character_type = ?"), 5, ('Droid',)),
+                      f"WHERE character_type = {self.p()}"), 5, ('Droid',)),
         )
         for td in tests:
             o = DbTable(self.dbengine)
@@ -140,47 +131,16 @@ class DbTableTest(TestCase):
             o = DbTable(self.dbengine, pk_field=td.pk_field)
             self.assertEqual(o.get_pk(td.obj), td.pk_value)
 
-    # def test_default_value(self):
-    #     TestData = namedtuple('TestData', 'column_default utcnow result')
-    #     tests = (
-    #         TestData(None, TEST_DATE, None),
-    #         TestData('CURRENT_TIME', TEST_DATE, '15:04:05'),
-    #         TestData('CURRENT_DATE', TEST_DATE, '2006-01-02'),
-    #         TestData('CURRENT_TIMESTAMP', TEST_DATE, '2006-01-02 15:04:05'),
-    #     )
-
-    #     with mock.patch('tbltalk.datetime') as dt_mock:
-    #         dt_mock.utcnow.return_value = TEST_DATE
-    #         dt_mock.side_effect = lambda *args, **kw: datetime(*args, **kw)
-    #         for td in tests:
-    #             o = DbTable(self.dbengine)
-    #             column = expando({'COLUMN_DEFAULT': td.column_default})
-    #             self.assertEqual(o.default_value(column), td.result)
-
-    # def default_value(self, column):
-    #     ''' Gets a default value for the column '''
-    #     result = None
-    #     deflt = column.COLUMN_DEFAULT
-    #     if not deflt:
-    #         result = None
-    #     elif deflt.upper() == "CURRENT_TIME":
-    #         result = datetime.utcnow().strftime("%H:%M:%S")
-    #     elif deflt.upper() == "CURRENT_DATE":
-    #         result = datetime.utcnow().strftime("%Y-%m-%d")
-    #     elif deflt.upper() == "CURRENT_TIMESTAMP":
-    #         result = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-    #     return result
-
     def test_create_delete_sql(self):
         TestData = namedtuple('TestData', 'table_name kwargs sql')
         tests = (
             TestData('tbl', {}, "DELETE FROM tbl"),
             TestData('tbl',
-                     {'where': 'id = ?'},
-                     "DELETE FROM tbl WHERE id = ?"),
+                     {'where': f'id = {self.p()}'},
+                     f"DELETE FROM tbl WHERE id = {self.p()}"),
             TestData('tbl',
-                     {'where': 'name = ? or age < 18'},
-                     "DELETE FROM tbl WHERE name = ? or age < 18"),
+                     {'where': f'name = {self.p()} or age < 18'},
+                     f"DELETE FROM tbl WHERE name = {self.p()} or age < 18"),
         )
         for td in tests:
             o = DbTable(self.dbengine, table_name=td.table_name)
@@ -188,38 +148,54 @@ class DbTableTest(TestCase):
             self.assertEqual(sql, td.sql)
 
     def test_delete(self):
-        with self.get_dbengine() as dbengine:
-            o = DbTable(dbengine, table_name="movies")
-            countquery = "SELECT COUNT(*) FROM movies"
-            self.assertEqual(o.scalar(countquery), 9)
-            o.delete_by_id(9)
-            self.assertEqual(o.scalar(countquery), 8)
-            o.delete(where="episode = ?", params=('I',))
-            self.assertEqual(o.scalar(countquery), 7)
-            o.delete(where="name like ?", params=('%Star%Wars%',))
-            self.assertEqual(o.scalar(countquery), 2)
+        dbengine = self.get_dbengine()
+        # remove all characters because FKs...
+        ch = DbTable(dbengine, table_name="characters")
+        self.assertEqual(ch.count(), 42)
+        ch.delete(where="1=1")
+        self.assertEqual(ch.count(), 0)
+
+        o = DbTable(dbengine, table_name="movies")
+        countquery = "SELECT COUNT(*) FROM movies"
+        self.assertEqual(o.scalar(countquery), 9)
+        o.delete_by_id(9)
+        self.assertEqual(o.scalar(countquery), 8)
+
+        where = f"episode = {self.p()}"
+        o.delete(where=where, params=('I',))
+        self.assertEqual(o.scalar(countquery), 7)
+
+        where = f"name like {self.p()}"
+        o.delete(where=where, params=('%Star%Wars%',))
+        self.assertEqual(o.scalar(countquery), 2)
 
     def test_create_insert_statement(self):
         TestData = namedtuple('TestData',
-                              'dbtbl_kwargs obj stmt')
+                              'dbtbl_kwargs obj cols vals params')
         tests = (
             TestData({'table_name': 'tbl'},
                      {'id': 1, 'a': 2, 'b': 3},
-                     SqlStatement(("INSERT INTO tbl (a, b)\n"
-                                   "VALUES (?, ?)"), (2, 3))),
+                     'a, b',
+                     f'{self.p()}, {self.p()}',
+                     (2, 3)),
             TestData({'table_name': 'tbl', 'pk_field': "tbl_key",
                       'pk_autonumber': False},
                      {'tbl_key': 1, 'a': 2, 'b': 3},
-                     SqlStatement(("INSERT INTO tbl (tbl_key, a, b)\n"
-                                   "VALUES (?, ?, ?)"), (1, 2, 3))),
+                     'tbl_key, a, b',
+                     f'{self.p()}, {self.p()}, {self.p()}',
+                     (1, 2, 3)),
         )
         for td in tests:
             o = DbTable(self.dbengine, **td.dbtbl_kwargs)
+            insert_sql = self.dbengine.dialect.insert_sql.format(
+                table=o.table_name, columns=td.cols,
+                values=td.vals, pk_field=o.pk_field
+            )
             stmt = o.create_insert_statement(td.obj)
-            self.assertEqual(stmt, td.stmt)
+            self.assertEqual(stmt, SqlStatement(insert_sql, td.params))
 
     def test_failed_insert(self):
-        countquery = "SELECT COUNT(*) FROM characters"
+        countquery = "SELECT COUNT(*) c FROM characters"
         o = DbTable(self.dbengine, table_name="characters")
         self.assertEqual(o.scalar(countquery), 42)
         with self.assertRaises(Exception):
@@ -228,7 +204,7 @@ class DbTableTest(TestCase):
         self.assertEqual(o.scalar(countquery), 42)
 
     def test_insert(self):
-        countquery = "SELECT COUNT(*) FROM characters"
+        countquery = "SELECT COUNT(*) c FROM characters"
         o = DbTable(self.dbengine, table_name="characters")
         self.assertEqual(o.scalar(countquery), 42)
         id = o.insert({
@@ -237,7 +213,7 @@ class DbTableTest(TestCase):
             'character_type': 'Human',
             'allegiance': '',
             'first_appeared_movie_id': 1,
-            'has_force': 0,
+            'has_force': False,
         })
         self.assertEqual(id, 43)
         self.assertEqual(o.scalar(countquery), 43)
@@ -248,10 +224,9 @@ class DbTableTest(TestCase):
         tests = (
             TestData({'table_name': 'tbl'},
                      {'id': 1, 'a': 'A', 'b': 3}, 1,
-                     SqlStatement(("UPDATE tbl\n"
-                                   "SET a = ?\n"
-                                   ",b = ?\n"
-                                   "WHERE id = ?"),
+                     SqlStatement(("UPDATE tbl "
+                                   f"SET a = {self.p()}, b = {self.p()} "
+                                   f"WHERE id = {self.p()}"),
                                   ('A', 3, 1)),),
         )
         for td in tests:
@@ -291,24 +266,32 @@ class DbTableTest(TestCase):
             TestData('tbl', {'columns': ('COUNT(*) as c',)},
                      "SELECT COUNT(*) as c FROM tbl"),
             TestData('tbl',
-                     {'where': 'name = ? and age > ?'},
-                     "SELECT * FROM tbl WHERE name = ? and age > ?"),
+                     {'where': f'name = {self.p()} and age > {self.p()}'},
+                     f"SELECT * FROM tbl WHERE name = {self.p()} and age > {self.p()}"),
             TestData('tbl',
                      {'columns': ('a', 'b'),
                       'distinct': True,
-                      'where': 'name = ? and age > ?',
+                      'where': f'name = {self.p()} and age > {self.p()}',
                       'orderby': ('name DESC', 'dob'),
                       'limit': 10},
-                     ("SELECT DISTINCT a, b "
+                     ("SELECT DISTINCT{top} a, b "
                       "FROM tbl "
-                      "WHERE name = ? and age > ? "
-                      "ORDER BY name DESC, dob "
-                      "LIMIT 10")),
+                      f"WHERE name = {self.p()} and age > {self.p()} "
+                      "ORDER BY name DESC, dob{limit}")),
         )
         for td in tests:
             o = DbTable(self.dbengine, table_name=td.table_name)
             sql = o.create_select_sql(**td.kwargs)
-            self.assertEqual(sql, td.select)
+            expected = td.select
+            if 'limit' in td.kwargs:
+                kw = self.dbengine.dialect.keywords.limit
+                top, limit = "", ""
+                if kw.upper() == "TOP":
+                    top = " TOP {}".format(td.kwargs['limit'])
+                else:
+                    limit = " LIMIT {}".format(td.kwargs['limit'])
+                expected = expected.format(top=top, limit=limit)
+            self.assertEqual(sql, expected)
 
     def test_get_by_id(self):
         TestData = namedtuple('TestData', 'dbtbl_kwargs id result')
@@ -347,12 +330,12 @@ class DbTableTest(TestCase):
                               'dbtbl_kwargs min_kwargs result')
         tests = (
             TestData({'table_name': 'movies'},
-                     {'columns': 'release_year'}, 1977),
+                     {'column': 'release_year'}, 1977),
             TestData({'table_name': 'characters'},
-                     {'columns': 'name'}, 'Admiral Ackbar'),
+                     {'column': 'name'}, 'Admiral Ackbar'),
             TestData({'table_name': 'characters'},
-                     {'columns': 'name',
-                      'where': 'character_type = ?',
+                     {'column': 'name',
+                      'where': f'character_type = {self.p()}',
                       'params': ('Droid',)}, 'BB-8'),
         )
         for td in tests:
@@ -365,12 +348,12 @@ class DbTableTest(TestCase):
                               'dbtbl_kwargs max_kwargs result')
         tests = (
             TestData({'table_name': 'movies'},
-                     {'columns': 'release_year'}, 2017),
+                     {'column': 'release_year'}, 2017),
             TestData({'table_name': 'characters'},
-                     {'columns': 'name'}, 'Yoda'),
+                     {'column': 'name'}, 'Yoda'),
             TestData({'table_name': 'characters'},
-                     {'columns': 'name',
-                      'where': 'character_type = ?',
+                     {'column': 'name',
+                      'where': f'character_type = {self.p()}',
                       'params': ('Droid',)}, 'R2-D2'),
         )
         for td in tests:
@@ -394,7 +377,7 @@ class DbTableTest(TestCase):
                 {'table_name': 'movies'},
                 {
                     'columns': ['id', 'name', 'episode'],
-                    'where': "director = ?",
+                    'where': f"director = {self.p()}",
                     'params': ('George Lucas',),
                     'orderby': 'release_year',
                     'page_size': 2,
@@ -443,3 +426,34 @@ class DbTableTest(TestCase):
 
 if __name__ == '__main__':
     unittest_main()
+
+    # def test_default_value(self):
+    #     TestData = namedtuple('TestData', 'column_default utcnow result')
+    #     tests = (
+    #         TestData(None, TEST_DATE, None),
+    #         TestData('CURRENT_TIME', TEST_DATE, '15:04:05'),
+    #         TestData('CURRENT_DATE', TEST_DATE, '2006-01-02'),
+    #         TestData('CURRENT_TIMESTAMP', TEST_DATE, '2006-01-02 15:04:05'),
+    #     )
+
+    #     with mock.patch('tbltalk.datetime') as dt_mock:
+    #         dt_mock.utcnow.return_value = TEST_DATE
+    #         dt_mock.side_effect = lambda *args, **kw: datetime(*args, **kw)
+    #         for td in tests:
+    #             o = DbTable(self.dbengine)
+    #             column = expando({'COLUMN_DEFAULT': td.column_default})
+    #             self.assertEqual(o.default_value(column), td.result)
+
+    # def default_value(self, column):
+    #     ''' Gets a default value for the column '''
+    #     result = None
+    #     deflt = column.COLUMN_DEFAULT
+    #     if not deflt:
+    #         result = None
+    #     elif deflt.upper() == "CURRENT_TIME":
+    #         result = datetime.utcnow().strftime("%H:%M:%S")
+    #     elif deflt.upper() == "CURRENT_DATE":
+    #         result = datetime.utcnow().strftime("%Y-%m-%d")
+    #     elif deflt.upper() == "CURRENT_TIMESTAMP":
+    #         result = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    #     return result
