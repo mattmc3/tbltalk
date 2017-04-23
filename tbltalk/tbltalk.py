@@ -7,7 +7,7 @@ import re
 import inspect
 from contextlib import contextmanager
 from datetime import datetime
-from collections import OrderedDict, namedtuple
+from collections import OrderedDict, namedtuple, Mapping
 SqlStatement = namedtuple('SqlStatement', 'sql params')
 PagedResult = namedtuple('PagedResult',
                          ['total_records', 'total_pages', 'page_size',
@@ -70,23 +70,23 @@ class DotDict(OrderedDict):
     assignment via object properties rather than dict indexing.
     '''
     def __init__(self, *args, **kwargs):
-        super(DotDict, self).__init__(*args, **kwargs)
+        od = OrderedDict(*args, **kwargs)
+        for key, val in od.items():
+            if isinstance(val, Mapping):
+                value = DotDict(val)
+            self[key] = val
 
     def __delattr__(self, name):
         try:
             del self[name]
-        except KeyError as err:
-            raise AttributeError()
+        except KeyError as ex:
+            raise AttributeError(f"No attribute called: {name}") from ex
 
     def __getattr__(self, k):
         try:
-            result = self[k]
-            if not isinstance(result, DotDict) and isinstance(result, dict):
-                return DotDict(result)
-            else:
-                return result
-        except KeyError as err:
-            raise AttributeError()
+            return = self[k]
+        except KeyError as ex:
+            raise AttributeError(f"No attribute called: {k}") from ex
 
     __setattr__ = OrderedDict.__setitem__
 
@@ -141,7 +141,7 @@ def to_dotdict(obj):
     ''' Converts an object to a DotDict '''
     if isinstance(obj, DotDict):
         return obj
-    elif isinstance(obj, dict):
+    elif isinstance(obj, Mapping):
         return DotDict(obj)
     else:
         result = DotDict()

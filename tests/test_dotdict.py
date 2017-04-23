@@ -99,6 +99,7 @@ class DotDictTest(unittest.TestCase):
         self.assertEqual(exp.listval[0], 1)
         self.assertEqual(exp.dictval, {'a': 1})
         self.assertEqual(exp.dictval['a'], 1)
+        self.assertEqual(exp.dictval.a, 1)
 
 
 if __name__ == '__main__' and __package__ is None:
