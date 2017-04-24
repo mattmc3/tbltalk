@@ -82,6 +82,12 @@ sqlite3_dialect = {**sql92_dialect, **{
     "get_last_inserted_id": "SELECT last_insert_rowid()",
 }}
 
+dialects = {
+    'sqlite3.Connection': sqlite3_dialect,
+    'psycopg2.extensions.connection': postgres_dialect,
+    'pymysql.connections.Connection': mariadb_dialect,
+}
+
 
 def unshoutcase(dialect):
     '''

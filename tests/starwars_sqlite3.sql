@@ -14,8 +14,9 @@
 --     **Change it the way you want it to be IN A TEST, not here.**
 --
 -- 1.) If you find yourself thinking: "Does Leia really have the Force if she
---     never learned to be a Jedi???"... then: you should write a test of the
---     UPDATE function to make it the way you want it.
+--     never learned to be a Jedi???". "Did Captain Phasma die in Ep 7?"...
+--     You should write a test of the UPDATE function to make it the way you
+--     want it. Changing anything here is the wrong path.
 -- 2.) If you find yourself thinking: "But you forgot <character x>!? (S)he is
 --     the best! How could you forget <character x>?"... then: you should write
 --     a test of the INSERT function add that character. Unless yousa wanna add
