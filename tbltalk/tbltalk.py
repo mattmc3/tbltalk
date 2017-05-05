@@ -73,7 +73,7 @@ class DotDict(OrderedDict):
         od = OrderedDict(*args, **kwargs)
         for key, val in od.items():
             if isinstance(val, Mapping):
-                value = DotDict(val)
+                val = DotDict(val)
             self[key] = val
 
     def __delattr__(self, name):
@@ -84,7 +84,7 @@ class DotDict(OrderedDict):
 
     def __getattr__(self, k):
         try:
-            return = self[k]
+            return self[k]
         except KeyError as ex:
             raise AttributeError(f"No attribute called: {k}") from ex
 
