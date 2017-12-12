@@ -3,12 +3,12 @@
 import unittest
 from unittest import mock
 from collections import namedtuple
-from .utils import DotDict
+from tbltalk import DbRow
 
 
-class DotDictTest(unittest.TestCase):
+class DbRowTest(unittest.TestCase):
     def test_add(self):
-        exp = DotDict()
+        exp = DbRow()
 
         # test that it's not there
         self.assertFalse(hasattr(exp, 'abc'))
@@ -24,7 +24,7 @@ class DotDictTest(unittest.TestCase):
         self.assertEqual(exp.abc, 123)
 
     def test_delete_attribute(self):
-        exp = DotDict()
+        exp = DbRow()
 
         # not there
         self.assertFalse(hasattr(exp, 'abc'))
@@ -46,7 +46,7 @@ class DotDictTest(unittest.TestCase):
             delattr(exp, 'abc')
 
     def test_delete_key(self):
-        exp = DotDict()
+        exp = DbRow()
 
         # not there
         self.assertFalse('abc' in exp)
@@ -67,7 +67,7 @@ class DotDictTest(unittest.TestCase):
             del exp['abc']
 
     def test_change_value(self):
-        exp = DotDict()
+        exp = DbRow()
         exp.abc = 123
         self.assertEqual(exp.abc, 123)
         self.assertEqual(exp.abc, exp['abc'])
@@ -82,24 +82,23 @@ class DotDictTest(unittest.TestCase):
         self.assertEqual(exp.abc, 789)
         self.assertEqual(exp.abc, exp['abc'])
 
-    def test_DotDict_dict_init(self):
-        exp = DotDict({'abc': 123, 'xyz': 456})
+    def test_dbrow_dict_init(self):
+        exp = DbRow({'abc': 123, 'xyz': 456})
         self.assertEqual(exp.abc, 123)
         self.assertEqual(exp.xyz, 456)
 
-    def test_DotDict_named_arg_init(self):
-        exp = DotDict(abc=123, xyz=456)
+    def test_dbrow_named_arg_init(self):
+        exp = DbRow(abc=123, xyz=456)
         self.assertEqual(exp.abc, 123)
         self.assertEqual(exp.xyz, 456)
 
-    def test_DotDict_datatypes(self):
-        exp = DotDict({'intval': 1, 'listval': [1, 2, 3], 'dictval': {'a': 1}}, deep=True)
+    def test_dbrow_datatypes(self):
+        exp = DbRow({'intval': 1, 'listval': [1, 2, 3], 'dictval': {'a': 1}})
         self.assertEqual(exp.intval, 1)
         self.assertEqual(exp.listval, [1, 2, 3])
         self.assertEqual(exp.listval[0], 1)
         self.assertEqual(exp.dictval, {'a': 1})
         self.assertEqual(exp.dictval['a'], 1)
-        self.assertEqual(exp.dictval.a, 1)
 
 
 if __name__ == '__main__' and __package__ is None:

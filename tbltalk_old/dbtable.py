@@ -1,112 +1,26 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 '''
-A single-file, python micro-ORM that embraces DB-API, the power of SQL, the
+A simple, python micro-ORM that embraces DB-API, the power of SQL, the
 simplicity of one-object-per-table, and the Zen of Python.
 '''
 import re
 import inspect
-from contextlib import contextmanager
-from datetime import datetime
 from collections import OrderedDict, namedtuple, Mapping
+from .dbconnection import DbConnection
+from .dbrow import DbRow
 SqlStatement = namedtuple('SqlStatement', 'sql params')
 PagedResult = namedtuple('PagedResult',
                          ['total_records', 'total_pages', 'page_size',
                           'current_page', 'records'])
 
 
-class DbEngine:
-    ''' A database engine impleminting DB-API v2.0+ '''
-    def __init__(self, dbapi, dialect, *args, **kwargs):
-        self.dbapi = dbapi
-        self.args = args
-        self.kwargs = kwargs
-        self.dialect = to_dotdict(dialect)
-        self._con = None
-        self._cur = None
-
-    def connect(self):
-        return self.dbapi.connect(*self.args, **self.kwargs)
-
-    @contextmanager
-    def cursor(self):
-        if self._con:
-            con = self._con
-            cur = self._cur
-            closeit = False
-        else:
-            con = self.connect()
-            cur = con.cursor()
-            closeit = True
-
-        try:
-            yield cur
-            con.commit()
-        except Exception:
-            con.rollback()
-            raise
-        finally:
-            if closeit:
-                con.close()
-
-    def set_shared_connection(self, con):
-        self._con = con
-        self._cur = con.cursor()
-
-    @contextmanager
-    def use_shared_connection(self, con):
-        if self._con and self._con != con:
-            raise RuntimeError(("Trying to use a shared cursor when one is "
-                                "already in use."))
-        self._con = con
-        self._cur = self._con.cursor()
-        yield self._cur
-        self._con = None
-        self._cur = None
-
-
-class DotDict(OrderedDict):
-    '''
-    Quick and dirty implementation of a dot-able dict, which allows access and
-    assignment via object properties rather than dict indexing.
-    '''
-    def __init__(self, *args, **kwargs):
-        od = OrderedDict(*args, **kwargs)
-        for key, val in od.items():
-            if isinstance(val, Mapping):
-                val = DotDict(val)
-            self[key] = val
-
-    def __delattr__(self, name):
-        try:
-            del self[name]
-        except KeyError as ex:
-            raise AttributeError(f"No attribute called: {name}") from ex
-
-    def __getattr__(self, k):
-        try:
-            return self[k]
-        except KeyError as ex:
-            raise AttributeError(f"No attribute called: {k}") from ex
-
-    __setattr__ = OrderedDict.__setitem__
-
-
-def first(iterable, default=None, raiseOnEmpty=False):
-    for element in iterable:
-        return element
-    if raiseOnEmpty:
-        raise ValueError("Empty iterable")
-    else:
-        return default
-
-
 def sqlparam(paramstyle, name=None, index=0):
     ''' Returns a sql parameter for the specified paramstyle '''
     # we need to be extra careful with params to prevent injection.
     if not isinstance(index, int):
-        raise ValueError(f"non-integer index value: {index}")
+        raise ValueError("non-integer index value: {}".format(index))
     if name and (';' in name or "'" in name):
-        raise ValueError("Unsupported name value: {name}")
+        raise ValueError("Unsupported name value: {}".format(name))
 
     # https://www.python.org/dev/peps/pep-0249/#paramstyle
     if paramstyle == 'qmark':
@@ -117,39 +31,11 @@ def sqlparam(paramstyle, name=None, index=0):
         if name is None:
             raise ValueError("name is None for paramstyle == 'named'")
         return f':{name}'
-    elif paramstyle == 'format':
-        return f'%s'
-    elif paramstyle == 'pyformat':
-        # if name is None:
-        #    return f'%s'
-        # else:
-        #    return f'%({name})s'
+    elif paramstyle in ['format', 'pyformat']:
+        # pyformat could also be f'%({name})s'
         return f'%s'
     else:
         raise ValueError(f"Unsupported paramstyle: {paramstyle}")
-
-
-def dotdict_row_factory(cur, row):
-    '''DB API helper to turn db rows from a cursor into DotDict objects'''
-    result = DotDict()
-    for idx, col in enumerate(cur.description):
-        result[col[0]] = row[idx]
-    return result
-
-
-def to_dotdict(obj):
-    ''' Converts an object to a DotDict '''
-    if isinstance(obj, DotDict):
-        return obj
-    elif isinstance(obj, Mapping):
-        return DotDict(obj)
-    else:
-        result = DotDict()
-        for name in dir(obj):
-            value = getattr(obj, name)
-            if not name.startswith('__') and not inspect.ismethod(value):
-                result[name] = value
-        return result
 
 
 def safeformat(str, **kwargs):
@@ -164,95 +50,51 @@ def safeformat(str, **kwargs):
 class DbTable:
     ''' A class that wraps your database table '''
 
-    def __init__(self, dbengine, table_name=None, pk_field="id",
-                 pk_autonumber=True):
-        self._dbengine = dbengine
-        self._schema = None
-        self.table_name = table_name or self.__class__.__name__
+    def __init__(self, connection, table_name=None, pk_field="id",
+                 table_schema=None, is_pk_autonumber=True):
+        if not isinstance(connection, DbConnection):
+            connection = DbConnection(connection)
+        self.connection = connection
+        self.table_schema = table_schema
+        self.table_name = table_name
         self.pk_field = pk_field
-        self.pk_autonumber = pk_autonumber
-        pat = "single|one|first|last|(find|get)(_by)?"
-        self._re_dynamic_methods = re.compile(pat)
-        self._ext_cur = None
+        self.is_pk_autonumber = is_pk_autonumber
 
     @property
-    def dialect(self):
-        return self._dbengine.dialect
-
-    @contextmanager
-    def cursor(self):
-        with self._dbengine.cursor() as cur:
-            yield cur
-
-    @contextmanager
-    def shared_connection(self, con):
-        with self._dbengine.shared_connection(con) as con:
-            yield con
-
-    def set_shared_connection(self, con):
-        self._dbengine.set_shared_connection(con)
-
-    def query(self, sql, params=()):
-        ''' Yields each row from a SQL query '''
-        with self.cursor() as cur:
-            # con.row_factory has side effects for always open connections
-            cur.execute(sql, params)
-            for row in cur:
-                yield dotdict_row_factory(cur, row)
-
-    def scalar(self, sql, params=()):
-        ''' Returns a single value '''
-        with self.cursor() as cur:
-            cur.execute(sql, params)
-            result = cur.fetchone()
-            if result is None or len(result) == 0:
-                return None
-            else:
-                return result[0]
-
-    def execute(self, sql, params=()):
-        ''' Executes a SQL statement '''
-        with self.cursor() as cur:
-            cur.execute(sql, params)
-
-    def executemany(self, sql, params=()):
-        ''' Executes a SQL statement multiple times for each set of params'''
-        with self.cursor() as cur:
-            cur.executemany(sql, params)
-
-    def executescript(self, sql, params=()):
-        ''' Executes a SQL statement '''
-        with self.cursor() as cur:
-            cur.executescript(sql, params)
+    def table():
+        if self.table_schema:
+            return f"{self.table_schema}.{self.table_name}"
+        else:
+            return self.table_name
 
     def get_by_id(self, id):
         '''
         Gets a record matching the id provided
         '''
         where = f"{self.pk_field} = {self.sqlparam(self.pk_field)}"
-        return self.single(where=where, params=(id,))
+        return self.connection.exactly_one(where=where, params=(id,))
 
     def has_pk(self, obj):
         '''
         Determines if the object provided has a property with a name matching
         whatever self.pk_field is set to.
         '''
-        return self.pk_field in to_dotdict(obj)
+        return self.pk_field in DbRow.from_object(obj)
 
     def get_pk(self, obj):
         '''
         If the object provided has a property with a name matching
         whatever self.pk_field is set to, that value is returned.
         '''
-        return to_dotdict(obj).get(self.pk_field, None)
+        return DbRow.from_object(obj).get(self.pk_field, None)
 
     def create_delete_sql(self, where=None):
         '''
         Makes a SQL delete statement to remove records from the DB according to
-        either the provided WHERE.
+        the provided WHERE.
         '''
         sqlfmt = self.dialect.delete_sql
-        sql = sqlfmt.format(table=self.table_name)
+        sql = sqlfmt.format(table=self.table)
         if where:
             sql += f" {self.dialect.keywords.where} {where}"
         return sql
@@ -279,7 +121,7 @@ class DbTable:
         obj = to_dotdict(obj)
         filtered_cols = [(k, v) for k, v in obj.items()
                          if k.lower() != self.pk_field.lower() or
-                         not self.pk_autonumber]
+                         not self.is_pk_autonumber]
         cols, params = zip(*filtered_cols)
         if len(cols) == 0:
             raise ValueError("Cannot use an object with no properties to "
@@ -288,7 +130,7 @@ class DbTable:
         paramvars = [self.sqlparam(c, i) for i, c in enumerate(cols)]
         values = ", ".join(paramvars)
         sqlfmt = self.dialect.insert_sql
-        sql = sqlfmt.format(table=self.table_name, columns=columns,
+        sql = sqlfmt.format(table=self.table, columns=columns,
                             values=values, pk_field=self.pk_field)
         return SqlStatement(sql, params)
 
@@ -339,7 +181,7 @@ class DbTable:
         where = f" WHERE {self.pk_field} = {pk_param}"
 
         sqlfmt = self.dialect.update_sql
-        sql = sqlfmt.format(table=self.table_name, set_columns=setclause)
+        sql = sqlfmt.format(table=self.table, set_columns=setclause)
         sql += where
         return SqlStatement(sql, tuple(param_vals))
 
@@ -364,7 +206,7 @@ class DbTable:
         '''
         return self._create_select_sql_impl(
             self.dialect.select_sql, columns=columns, distinct=distinct,
-            table=self.table_name, where=where, groupby=groupby,
+            table=self.table, where=where, groupby=groupby,
             having=having, orderby=orderby, limit=limit)
 
     def _create_select_sql_impl(self, select_sqlfmt, columns="*",
@@ -474,7 +316,7 @@ class DbTable:
         pagingsqlfmt = self.dialect.paging[1]
         pagingsql = self._create_select_sql_impl(
             pagingsqlfmt, columns=columns, distinct=distinct,
-            table=self.table_name, where=where, groupby=groupby,
+            table=self.table, where=where, groupby=groupby,
             having=having, orderby=orderby)
         pagingsql = pagingsql.format(page_size=page_size,
                                      page_start=page_start,
@@ -491,6 +333,7 @@ class DbTable:
         statements = []
         for obj in args:
             statements.append(self.create_upsert_statement(obj))
+        self.connection
         with self.cursor() as cur:
             cur = con.cursor()
             for stmt in statements:
