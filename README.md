@@ -1,4 +1,4 @@
-# tbltalk - v0.0.1
+# Figurine - v0.0.1
 
 TODO:
 - Explain
